@@ -63,7 +63,11 @@ def load_config(path: Path) -> dict:
             log(f"[失败] 配置文件解析错误: {exc}")
             sys.exit(3)
     elif not os.environ.get("SMTP_SENDER"):
-        log(f"[失败] 配置文件不存在且未提供 SMTP_SENDER 环境变量: {path}")
+        log(
+            "[失败] 未找到发信配置：本地 config/smtp_config.json 不存在，且未提供 SMTP_SENDER 环境变量。\n"
+            "       云端请检查仓库 Settings → Secrets and variables → Actions 是否已添加：\n"
+            "       SMTP_SENDER / SMTP_AUTHCODE / SMTP_RECIPIENT（大小写一致）。"
+        )
         sys.exit(3)
 
     def env_or(key: str, default):
