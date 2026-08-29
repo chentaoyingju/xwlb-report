@@ -1,0 +1,10 @@
+# ===== 敏感凭据：严禁提交 =====
+config/smtp_config.json
+.credentials.yaml
+
+# ===== 运行时产物 =====
+reports/
+logs/
+__pycache__/
+*.pyc
+debug.log

@@ -1,0 +1,46 @@
+# 新闻联播日报 · 云端执行（GitHub Actions）
+# 每天 13:35 UTC = 北京时间 21:35 自动运行独立离线脚本：
+#   采集（新浪7x24 + Bing）→ DeepSeek API 分析 → 生成 reports/YYYY-MM-DD.md → SMTP 推送
+# 凭据全部通过 GitHub Secrets 加密注入（环境变量），不写入仓库。
+name: daily-xinwenlianbo-report
+
+on:
+  schedule:
+    - cron: "35 13 * * *"   # 每天 13:35 UTC = 21:35 北京时间
+  workflow_dispatch: {}     # 支持在 Actions 页面手动触发
+
+permissions:
+  contents: read            # 最小权限：只读代码，不写仓库
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    env:
+      TZ: Asia/Shanghai      # 保证脚本内 date.today() 为北京时间
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Run daily report
+        env:
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY }}
+          SMTP_SENDER: ${{ secrets.SMTP_SENDER }}
+          SMTP_AUTHCODE: ${{ secrets.SMTP_AUTHCODE }}
+          SMTP_RECIPIENT: ${{ secrets.SMTP_RECIPIENT }}
+          SMTP_HOST: smtp.qq.com
+          SMTP_PORT: "465"
+          SMTP_SSL: "true"
+        run: |
+          python scripts/standalone_report.py
+
+      - name: Upload report (optional)
+        uses: actions/upload-artifact@v4
+        with:
+          name: xinwenlianbo-report
+          path: reports/*.md
+          if-no-files-found: ignore
