@@ -212,7 +212,7 @@ def acquire_sina_7x24(report_date: str) -> tuple[str | None, str | None]:
     找不到返回 (None, None)。
     """
     target_id: int | None = None
-    for page in range(1, 9):
+    for page in range(1, 13):
         url = (
             "https://zhibo.sina.com.cn/api/zhibo/feed"
             f"?page={page}&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1"
