@@ -237,6 +237,10 @@ def acquire_sina_7x24(report_date: str) -> tuple[str | None, str | None]:
             break
         time.sleep(0.4)
     if not target_id:
+        log(
+            "[采集] 新浪 7x24 未命中（已翻页 1-12；可能原因：接口不可达 / 当日内容未上线 / "
+            "条目已滚出窗口 / 帖子文本不含《新闻联播》主要内容）"
+        )
         return None, None
 
     # 抓取 wap 文章页完整正文（rich_text 常被截断为 ~660 字符）
