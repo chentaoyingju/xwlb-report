@@ -62,10 +62,11 @@ def write_log(line: str) -> None:
         pass
 
 
-def http_get(url: str, timeout: int = 25) -> bytes:
-    req = urllib.request.Request(
-        url, headers={"User-Agent": UA, "Accept": "text/html,*/*", "Accept-Language": "zh-CN,zh;q=0.9"}
-    )
+def http_get(url: str, timeout: int = 25, headers: dict | None = None) -> bytes:
+    hdrs = {"User-Agent": UA, "Accept": "text/html,*/*", "Accept-Language": "zh-CN,zh;q=0.9"}
+    if headers:
+        hdrs.update(headers)
+    req = urllib.request.Request(url, headers=hdrs)
     with urllib.request.urlopen(req, timeout=timeout, context=ssl.create_default_context()) as resp:
         return resp.read()
 
@@ -103,7 +104,7 @@ def bing_search(query: str, n: int = 8) -> list[tuple[str, str, str]]:
     )
     for attempt in range(2):
         try:
-            html_text = decode(http_get(base, timeout=25))
+            html_text = decode(http_get(base, timeout=15))
         except Exception as exc:  # noqa: BLE001
             log(f"[采集] Bing 请求失败（第 {attempt + 1} 次）: {exc}")
             time.sleep(2)
@@ -136,7 +137,7 @@ def sogou_search(query: str, n: int = 5) -> list[tuple[str, str, str]]:
     """Sogou 兜底搜索。"""
     url = "https://www.sogou.com/web?query=" + urllib.parse.quote(query)
     try:
-        html_text = decode(http_get(url, timeout=25))
+        html_text = decode(http_get(url, timeout=10))
     except Exception as exc:  # noqa: BLE001
         log(f"[采集] Sogou 请求失败: {exc}")
         return []
@@ -146,6 +147,27 @@ def sogou_search(query: str, n: int = 5) -> list[tuple[str, str, str]]:
         t = re.sub(r"<[^>]+>", "", block).strip()
         if m and t:
             out.append((m.group(1), t, ""))
+    return out
+
+
+def ddg_search(query: str, n: int = 6) -> list[tuple[str, str, str]]:
+    """DuckDuckGo HTML 兜底搜索（对 GitHub 海外运行器较友好）。"""
+    url = "https://html.duckduckgo.com/html/?q=" + urllib.parse.quote(query)
+    try:
+        text = decode(http_get(url, timeout=10))
+    except Exception as exc:  # noqa: BLE001
+        log(f"[采集] DDG 请求失败: {exc}")
+        return []
+    out: list[tuple[str, str, str]] = []
+    for m in re.finditer(r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>', text, re.S):
+        u = m.group(1).strip()
+        if u.startswith("//duckduckgo.com/l/?uddg="):
+            u = urllib.parse.unquote(u.split("uddg=")[1].split("&")[0])
+        t = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+        if u.startswith("http") and t:
+            out.append((u, t, ""))
+        if len(out) >= n:
+            break
     return out
 
 
@@ -166,6 +188,8 @@ def retrieve_context(item_titles: list[str], per_item: int = 3, cap: int = 40) -
         res = bing_search(q + " 最新", n=per_item + 2)
         if not res:
             res = bing_search(q, n=per_item + 2)
+        if not res:
+            res = ddg_search(q, n=per_item + 2)
         if res:
             out.append((title, res[:per_item]))
             total += len(res[:per_item])
@@ -212,20 +236,34 @@ def acquire_sina_7x24(report_date: str) -> tuple[str | None, str | None]:
     找不到返回 (None, None)。
     """
     target_id: int | None = None
+    scanned = 0
+    api_status: str = "?"
+    consecutive_fail = 0
     for page in range(1, 13):
         url = (
             "https://zhibo.sina.com.cn/api/zhibo/feed"
             f"?page={page}&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1"
         )
         try:
-            j = json.loads(http_get(url, timeout=20).decode("utf-8", "replace"))
+            j = json.loads(
+                http_get(url, timeout=12, headers={"Referer": "https://zhibo.sina.com.cn/"}).decode("utf-8", "replace")
+            )
         except Exception as exc:  # noqa: BLE001
             log(f"[采集] 新浪 7x24 第 {page} 页失败: {exc}")
+            consecutive_fail += 1
+            if page == 1 or consecutive_fail >= 3:
+                log("[采集] 新浪 7x24 连续失败/首页失败（疑似 IP 受限），中止扫描")
+                return None, None
             time.sleep(1)
             continue
+        consecutive_fail = 0
+        status = (j.get("result") or {}).get("status") or {}
+        api_status = str(status)
         items = ((j.get("result") or {}).get("data") or {}).get("feed") or {}
         lst = items.get("list") or []
+        scanned += len(lst)
         if not lst:
+            log(f"[采集] 新浪 7x24 第 {page} 页为空（API status={api_status}），中止扫描")
             break
         for it in lst:
             rt = it.get("rich_text") or ""
@@ -238,8 +276,8 @@ def acquire_sina_7x24(report_date: str) -> tuple[str | None, str | None]:
         time.sleep(0.4)
     if not target_id:
         log(
-            "[采集] 新浪 7x24 未命中（已翻页 1-12；可能原因：接口不可达 / 当日内容未上线 / "
-            "条目已滚出窗口 / 帖子文本不含《新闻联播》主要内容）"
+            f"[采集] 新浪 7x24 未命中（翻页 1-12，共扫描 {scanned} 条，API status={api_status}；"
+            "可能原因：接口对当前 IP 返回受限内容 / 当日帖子不含《新闻联播》主要内容 / 条目滚出窗口）"
         )
         return None, None
 
@@ -262,13 +300,48 @@ def acquire_sina_7x24(report_date: str) -> tuple[str | None, str | None]:
     return None, None
 
 
+CCTV_COLUMN_API = (
+    "https://api.cntv.cn/NewVideo/getVideoListByColumn"
+    "?id=TOPC1451528971114112&n=30&sort=desc&p=1&mode=0&serviceId=tvcctv"
+)
+
+
+def acquire_cctv_api(report_date: str) -> tuple[str | None, str | None]:
+    """央视官方《新闻联播》栏目 API：返回 (完整条目文本, 节目页URL)。
+
+    权威、简体、不依赖搜索引擎、全球可访问；brief 字段即"本期节目主要内容"完整编号列表。
+    """
+    ymd = report_date.replace("-", "")
+    try:
+        j = json.loads(
+            http_get(CCTV_COLUMN_API, timeout=15, headers={"Referer": "https://tv.cctv.com/lm/xwlb/"}).decode(
+                "utf-8", "replace"
+            )
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"[采集] 央视 API 请求失败: {exc}")
+        return None, None
+    lst = ((j.get("data") or {}).get("list")) or []
+    cands = [it for it in lst if ymd in (it.get("title") or "")]
+    if not cands:
+        log(f"[采集] 央视 API 未找到 {report_date} 节目（返回 {len(lst)} 条，最近为 {((lst[0].get('title') or '') if lst else '无')}）")
+        return None, None
+    it = next((x for x in cands if "19:00" in x.get("title", "")), cands[0])
+    brief = (it.get("brief") or "").strip()
+    url = it.get("url") or ""
+    log(f"[采集] 央视 API 命中：{it.get('title')}（brief {len(brief)} 字符）")
+    return brief, url
+
+
 def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]], list[tuple[str, str, str]], str | None]:
     """采集当日条目。返回 (item_sets 按条数降序, sources, sina_authoritative_text)。"""
     ymd = report_date.replace("-", "")
     y, m, d = (int(x) for x in report_date.split("-"))
     pat = date_pattern(report_date, m, d)
 
-    # 0) 主通道：新浪 7x24 完整清单
+    # 0) 主通道：央视官方 API（权威、不依赖搜索引擎）
+    cctv_text, cctv_url = acquire_cctv_api(report_date)
+    # 1) 次通道：新浪 7x24（部分日期缺失，仅作补充）
     sina_text, sina_url = acquire_sina_7x24(report_date)
 
     queries = [
@@ -286,15 +359,35 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
         f"新闻联播 {ymd} 文字稿",
     ]
     results: list[tuple[str, str, str]] = []
-    for q in queries:
-        log(f"[采集] Bing 检索: {q}")
-        results.extend(bing_search(q))
-        if not results:
-            results.extend(sogou_search(q))
-        time.sleep(0.5)
+    ddg_disabled = False
+    if not cctv_text:  # 已拿到央视官方完整清单时，跳过搜索引擎扫描（云端 Bing 常被降级）
+        for q in queries:
+            log(f"[采集] Bing 检索: {q}")
+            res = bing_search(q)
+            # Bing 返回门户首页等垃圾结果时，换 DDG 兜底（失败一次后本批不再重试，避免超时堆叠）
+            if not any(("新闻联播" in (t + s)) or has_date_evidence(u, t, s, pat) for u, t, s in res):
+                if ddg_disabled:
+                    log("[采集]   Bing 结果非目标内容（DDG 先前失败，跳过）")
+                else:
+                    log("[采集]   Bing 结果非目标内容，尝试 DDG")
+                    d = ddg_search(q)
+                    if d:
+                        res = d
+                    else:
+                        ddg_disabled = True
+            results.extend(res)
+            if not res:
+                log("[采集]   尝试 Sogou")
+                results.extend(sogou_search(q))
+            time.sleep(0.5)
+    else:
+        log("[采集] 已获央视官方完整清单，跳过搜索引擎扫描")
 
     seen: set[str] = set()
     candidates: list[tuple[str, str, str]] = []
+    if cctv_url:
+        candidates.append((cctv_url, "央视官方《新闻联播》节目页", (cctv_text or "")[:120]))
+        seen.add(cctv_url.split("?")[0])
     if sina_url:
         candidates.append((sina_url, "新浪7x24《新闻联播》主要内容", (sina_text or "")[:120]))
         seen.add(sina_url.split("?")[0])
@@ -309,19 +402,26 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
         seen.add(u2)
         candidates.append((u, t, s))
 
-    # 日期过滤：优先保留 URL/标题/摘要含目标日期的来源
+    # 日期过滤：优先保留 URL/标题/摘要含目标日期的来源；
+    # 若无日期命中，放宽到"标题/摘要含『新闻联播』主题词"的候选（避免门户首页垃圾）
     dated = [c for c in candidates if has_date_evidence(*c, pat)]
-    undated = [c for c in candidates if not has_date_evidence(*c, pat)]
-    log(f"[采集] 候选来源 {len(candidates)} 个（命中目标日期 {len(dated)} 个）")
+    if len(dated) < 2:
+        kw = re.compile(r"新闻联播")
+        extra = [c for c in candidates if c not in dated and kw.search(c[1] + " " + c[2])]
+        dated = (dated + extra)[:12]
+        log(f"[采集] 候选来源 {len(candidates)} 个（日期命中 {sum(1 for c in candidates if has_date_evidence(*c, pat))}，含主题词放宽 {len(extra)}）")
+    else:
+        log(f"[采集] 候选来源 {len(candidates)} 个（命中目标日期 {len(dated)} 个）")
+    undated = [c for c in candidates if c not in dated]
     ordered = (dated + undated)[:14]
     for u, t, s in ordered[:12]:
         log(f"[采集]   {t[:40] or u[:60]} | {u[:90]}")
 
-    # 抓取页面（仅保留含目标日期的页面正文；失败用摘要兜底）
+    # 抓取页面（仅保留含目标日期的页面正文；失败用摘要兜底；超时收紧避免挂起）
     page_texts: list[tuple[str, str]] = []
-    for url, title, snippet in ordered[:12]:
+    for url, title, snippet in ordered[:8]:
         try:
-            text = strip_html(decode(http_get(url, timeout=25)))
+            text = strip_html(decode(http_get(url, timeout=12)))
         except Exception as exc:  # noqa: BLE001
             log(f"[采集]   抓取失败 {exc} <- {url[:80]}（改用摘要）")
             text = f"（抓取失败，搜索引擎摘要）{snippet}"
@@ -334,6 +434,9 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
     # 条目集：每个来源一份（过滤页脚/版权等噪音）
     boilerplate = re.compile(r"版权|本网|免责|非法使用|联系本网|移除")
     item_sets: list[tuple[str, list[str]]] = []
+    if cctv_text:
+        items = [it for it in extract_items(cctv_text) if not boilerplate.search(it)]
+        item_sets.append(("央视官方口径(完整清单)", items))
     if sina_text:
         items = [it for it in extract_items(sina_text) if not boilerplate.search(it)]
         item_sets.append(("新浪7x24官方口径(完整清单)", items))
@@ -536,6 +639,9 @@ def build_user_message(
             lines.append(f"◆ 条目：{title[:50]}")
             for j, (u, t, s) in enumerate(hits, 1):
                 lines.append(f"   {j}. {t[:60]} | {u}" + (f" | 摘要：{s[:120]}" if s else ""))
+        lines.append("")
+    else:
+        lines.append("【形势检索信息】无（网络/搜索引擎受限，未能获取）；如需推演，请基于公开常识并明确标注假设。")
         lines.append("")
     lines.append(
         "要求：按系统提示词规范完成可分析性检查、分档（只标🔴🟡⚪不标分数）、"

@@ -44,6 +44,10 @@ jobs:
           SMTP_SSL: "true"
           INPUT_DATE: ${{ inputs.date }}
         run: |
+          echo "=== 凭据注入检查（只显示是否注入，不显示值）==="
+          for v in DEEPSEEK_API_KEY SMTP_SENDER SMTP_AUTHCODE SMTP_RECIPIENT; do
+            if [ -n "${!v}" ]; then echo "$v: OK(set)"; else echo "$v: MISSING"; fi
+          done
           ARGS=""
           if [ -n "$INPUT_DATE" ]; then ARGS="--date $INPUT_DATE"; fi
           python scripts/standalone_report.py $ARGS
