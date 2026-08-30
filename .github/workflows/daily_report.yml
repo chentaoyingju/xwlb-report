@@ -1,13 +1,14 @@
 # 新闻联播日报 · 云端执行（GitHub Actions）
-# 每天 13:35 UTC = 北京时间 21:35 自动运行独立离线脚本：
-#   采集（新浪7x24 + Bing）→ DeepSeek API 分析 → 生成 reports/YYYY-MM-DD.md → SMTP 推送
+# 每天 12:00 UTC = 北京时间 20:00 自动运行独立离线脚本：
+#   采集（新浪7x24 + Bing）→ 形势检索 → DeepSeek API 分析（含逐条计算推演与判断）
+#   → 生成 reports/YYYY-MM-DD.md → SMTP 推送
 # 凭据全部通过 GitHub Secrets 加密注入（环境变量），不写入仓库。
 name: daily-xinwenlianbo-report
 
 on:
   schedule:
-    - cron: "35 13 * * *"   # 每天 13:35 UTC = 21:35 北京时间
-  workflow_dispatch:        # 手动触发（可指定补跑日期）
+    - cron: "0 12 * * *"      # 每天 12:00 UTC = 20:00 北京时间
+  workflow_dispatch:          # 手动触发（可指定补跑日期）
     inputs:
       date:
         description: "补跑日期 YYYY-MM-DD（留空=今天，北京时间）"
@@ -15,13 +16,14 @@ on:
         default: ""
 
 permissions:
-  contents: read            # 最小权限：只读代码，不写仓库
+  contents: read              # 最小权限：只读代码，不写仓库
 
 jobs:
   report:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
-      TZ: Asia/Shanghai      # 保证脚本内 date.today() 为北京时间
+      TZ: Asia/Shanghai       # 保证脚本内 date.today() 为北京时间
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -46,9 +48,11 @@ jobs:
           if [ -n "$INPUT_DATE" ]; then ARGS="--date $INPUT_DATE"; fi
           python scripts/standalone_report.py $ARGS
 
-      - name: Upload report (optional)
+      - name: Upload report + logs (optional)
         uses: actions/upload-artifact@v4
         with:
           name: xinwenlianbo-report
-          path: reports/*.md
+          path: |
+            reports/*.md
+            logs/*.log
           if-no-files-found: ignore

@@ -48,7 +48,7 @@ UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 DEEPSEEK_API = "https://api.deepseek.com/chat/completions"
-MODEL_FALLBACK = ["deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"]
+MODEL_FALLBACK = ["deepseek-chat", "deepseek-v4-flash", "deepseek-reasoner"]
 LOG_FILE = ROOT / "logs" / "standalone.log"
 
 # ---------------------------------------------------------------- 基础工具
@@ -93,27 +93,43 @@ def strip_html(text: str) -> str:
 # ---------------------------------------------------------------- 搜索与采集
 
 def bing_search(query: str, n: int = 8) -> list[tuple[str, str, str]]:
-    """Bing 搜索 HTML 解析 -> [(url, title, snippet)]。失败/被反爬返回空列表。"""
-    url = "https://www.bing.com/search?q=" + urllib.parse.quote(query) + "&setlang=zh-CN&count=" + str(n * 2)
-    try:
-        html_text = decode(http_get(url, timeout=25))
-    except Exception as exc:  # noqa: BLE001
-        log(f"[采集] Bing 请求失败: {exc}")
-        return []
-    if "b_algo" not in html_text:
-        log("[采集] Bing 未返回结果块（可能被反爬）")
-        return []
-    out: list[tuple[str, str, str]] = []
-    for block in re.findall(r'<li class="b_algo".*?</li>', html_text, re.S)[:n]:
-        m = re.search(r'<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
-        if not m:
+    """Bing 搜索 HTML 解析 -> [(url, title, snippet)]。失败/被反爬返回空列表。
+
+    指定中文市场参数（mkt=zh-CN）提高命中；检测反爬页并重试一次。
+    """
+    base = (
+        "https://www.bing.com/search?q=" + urllib.parse.quote(query)
+        + "&setlang=zh-hans&mkt=zh-CN&count=" + str(n * 2)
+    )
+    for attempt in range(2):
+        try:
+            html_text = decode(http_get(base, timeout=25))
+        except Exception as exc:  # noqa: BLE001
+            log(f"[采集] Bing 请求失败（第 {attempt + 1} 次）: {exc}")
+            time.sleep(2)
             continue
-        url, title = m.group(1), re.sub(r"<[^>]+>", "", m.group(2)).strip()
-        sn = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
-        snippet = re.sub(r"<[^>]+>", "", sn.group(1)).strip() if sn else ""
-        if url.startswith("http"):
-            out.append((url, title, snippet))
-    return out
+        low = html_text.lower()
+        if "b_algo" not in html_text:
+            if "captcha" in low or "robot" in low or "verify" in low:
+                log(f"[采集] Bing 触发反爬（captcha），第 {attempt + 1} 次放弃")
+            else:
+                log(f"[采集] Bing 未返回结果块（第 {attempt + 1} 次）")
+            time.sleep(2)
+            continue
+        out: list[tuple[str, str, str]] = []
+        for block in re.findall(r'<li class="b_algo".*?</li>', html_text, re.S)[:n]:
+            m = re.search(r'<h2[^>]*><a[^>]*href="([^"]+)"[^>]*>(.*?)</a>', block, re.S)
+            if not m:
+                continue
+            url, title = m.group(1), re.sub(r"<[^>]+>", "", m.group(2)).strip()
+            sn = re.search(r"<p[^>]*>(.*?)</p>", block, re.S)
+            snippet = re.sub(r"<[^>]+>", "", sn.group(1)).strip() if sn else ""
+            if url.startswith("http"):
+                out.append((url, title, snippet))
+        if out:
+            return out
+        time.sleep(2)
+    return []
 
 
 def sogou_search(query: str, n: int = 5) -> list[tuple[str, str, str]]:
@@ -130,6 +146,31 @@ def sogou_search(query: str, n: int = 5) -> list[tuple[str, str, str]]:
         t = re.sub(r"<[^>]+>", "", block).strip()
         if m and t:
             out.append((m.group(1), t, ""))
+    return out
+
+
+def retrieve_context(item_titles: list[str], per_item: int = 3, cap: int = 40) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """结合当前形势检索：对关键条目标题做 Bing 检索，收集 1-3 条相关当前信息。
+
+    返回 [(条目标题, [(url, 标题, 摘要), ...]), ...]，供 LLM 逐条计算推演并给出判断。
+    """
+    out: list[tuple[str, list[tuple[str, str, str]]]] = []
+    total = 0
+    for title in item_titles:
+        if total >= cap:
+            break
+        q = re.sub(r"[\s【】\[\]（）()：:]+", " ", title).strip()[:40]
+        if not q:
+            continue
+        log(f"[检索] 形势检索：{q[:36]}")
+        res = bing_search(q + " 最新", n=per_item + 2)
+        if not res:
+            res = bing_search(q, n=per_item + 2)
+        if res:
+            out.append((title, res[:per_item]))
+            total += len(res[:per_item])
+        time.sleep(0.3)
+    log(f"[检索] 形势检索完成：覆盖 {len(out)} 个条目，共 {total} 条信息")
     return out
 
 
@@ -164,12 +205,6 @@ def has_date_evidence(url: str, title: str, snippet: str, pat: re.Pattern) -> bo
     return bool(pat.search(url + " " + title + " " + snippet))
 
 
-def acquire_sina_7x24(report_date: str) -> str | None:
-    """新浪 7x24 直播流（zhibo_id=152）翻页检索当日《新闻联播》主要内容完整清单。
-
-    返回 rich_text（含全部编号条目），找不到返回 None。该通道当日 19:47 后即可用，
-    是独立脚本最可靠的当日完整清单来源。
-    """
 def acquire_sina_7x24(report_date: str) -> tuple[str | None, str | None]:
     """新浪 7x24 直播流（zhibo_id=152）检索当日《新闻联播》主要内容，返回 (完整条目文本, wap文章URL)。
 
@@ -404,7 +439,17 @@ SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产�
 
 【分档】内部按五维评分（政策信号0-30/产业影响0-25/量化指标0-20/时效落地0-15/新提法0-10，总分100）确定等级，但【严禁在输出中出现任何分数或分项数值】：🔴重点关注=总评高、🟡一般关注=中、⚪常规报道=低（只列标题）。只输出等级标签，不输出分数。
 
-【内容规范】🔴条目：内容摘要/关键信号/📊深度分析（政策意图、传导路径：政策→资金→订单→财报、受益画像）/🔮规范预测（时间窗口【短期/中期/长期+明确年月】、核心条件"若…则…"、3个可观测跟踪指标、证伪底线"若X未在Y前发生则预测失效"）。🟡条目：内容摘要/💡简析（短期情绪或细分领域压力）/📌观察哨（出现何种信号则升级）。⚪只列标题。
+【内容规范】
+- 🔴条目：内容摘要 / 关键信号 / 📊深度分析（政策意图、传导路径：政策→资金→订单→财报、受益画像）/ 🔎形势检索与推演 / 🔮规范预测（时间窗口【短期/中期/长期+明确年月】、核心条件"若…则…"、3个可观测跟踪指标、证伪底线"若X未在Y前发生则预测失效"）。
+- 🟡条目：内容摘要 / 💡简析（短期情绪或细分领域压力）/ 检索要点与判断（简短）/ 📌观察哨（出现何种信号则升级）。
+- ⚪只列标题。
+- 【每个条目只能出现在一个分档中，严禁跨档重复】；同一条新闻去重合并后只归入最高分档。
+
+【形势检索与推演（🔴必做、🟡简做）】
+使用用户提供的"形势检索信息"（每条含来源 URL），对**每一条检索信息**做【计算推演】：
+结合具体数字估算影响量级、推演传导路径与时间节奏（如"若X增速为Y%，则Z环节订单/价格影响约W%"），
+必须有数字支撑或明确假设、可复核；然后给出【判断】：影响方向（利好/中性/承压）、强度（强/中/弱）、
+置信度（高/中/低）、需警惕的风险点。推演必须基于检索信息与公开数据，禁止无依据臆测；引用检索来源 URL。
 
 【输出模板】严格按以下结构输出完整 Markdown（不要输出其他内容，不要输出分数）：
 # 📺 新闻联播日报 {YYYY年MM月DD日}
@@ -422,12 +467,14 @@ SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产�
 - **内容摘要**：…
 - **关键信号**：…
 - **📊 深度分析**：政策意图 / 传导路径 / 受益画像
+- **🔎 形势检索与推演**：检索信息①（来源URL）→ 计算推演 → 判断；检索信息② → 推演 → 判断
 - **🔮 规范预测**：时间窗口 / 核心条件 / 跟踪指标①②③ / 证伪条件
 
 ## 🟡 一般关注
 ### 1. 【新闻标题】
 - **内容摘要**：…
 - **💡 简析**：…
+- **检索要点与判断**：简短要点 → 判断
 - **📌 观察哨**：…
 
 ## ⚪ 常规报道
@@ -455,7 +502,12 @@ def strip_scores(md: str) -> str:
 
 
 def build_user_message(
-    report_date: str, date_cn: str, item_sets: list, sources: list, sina_text: str | None
+    report_date: str,
+    date_cn: str,
+    item_sets: list,
+    sources: list,
+    sina_text: str | None,
+    retrieval: list | None = None,
 ) -> str:
     lines = [
         f"请生成 {date_cn}《新闻联播》自动化日报。",
@@ -474,10 +526,17 @@ def build_user_message(
         lines.append(f"--- 来源: {url[:80]}（{len(items)} 条）---")
         lines.append("；".join(items[:40]))
     lines.append("")
+    if retrieval:
+        lines.append("【形势检索信息（供逐条计算推演与判断；对每一条都要推演并给出判断，引用其URL）】")
+        for title, hits in retrieval:
+            lines.append(f"◆ 条目：{title[:50]}")
+            for j, (u, t, s) in enumerate(hits, 1):
+                lines.append(f"   {j}. {t[:60]} | {u}" + (f" | 摘要：{s[:120]}" if s else ""))
+        lines.append("")
     lines.append(
         "要求：按系统提示词规范完成可分析性检查、分档（只标🔴🟡⚪不标分数）、"
-        "深度分析与规范预测，输出完整日报 Markdown；程序性备忘条目一句话概况；"
-        "来源必须引用上面给出的 URL；概览总条数需与官方口径一致（含联播快讯子项，通常20-25条）；"
+        "深度分析与规范预测，对🔴/🟡条目结合【形势检索信息】逐条计算推演并给出判断（融入现有板块）；"
+        "程序性备忘条目一句话概况；来源必须引用上面给出的 URL；概览总条数需与官方口径一致（含联播快讯子项，通常20-25条）；"
         "生成时间用当前时间。"
     )
     return "\n".join(lines)
@@ -511,7 +570,8 @@ def main() -> int:
     p.add_argument("--force", action="store_true", help="忽略已发送 marker 强制重发")
     p.add_argument("--fetch-only", action="store_true", help="仅采集并打印，不调用 API/不写文件/不发信")
     p.add_argument("--api-key", default=None, help="DeepSeek API Key（默认读环境变量或 ~/.dsh/.credentials.yaml）")
-    p.add_argument("--model", default="deepseek-v4-flash", help="首选模型")
+    p.add_argument("--model", default="deepseek-chat", help="首选模型（长任务推荐 deepseek-chat）")
+    p.add_argument("--skip-retrieval", action="store_true", help="跳过形势检索（调试用）")
     args = p.parse_args()
 
     report_date = args.date or date.today().isoformat()
@@ -535,20 +595,32 @@ def main() -> int:
         log(f"[采集] 完成，来源 {len(sources)}，条目集 {len(item_sets)}，新浪完整清单={'有' if sina_text else '无'}。fetch-only 模式退出。")
         return 0
 
-    # 2) 组装内容
+    # 2) 组装内容（含形势检索 → 逐条推演 → 判断）
     if item_sets and item_sets[0][1]:
         api_key = resolve_api_key(args.api_key)
         if not api_key:
             log("[失败] 未找到 DEEPSEEK_API_KEY（--api-key / 环境变量 / ~/.dsh/.credentials.yaml）")
             return 3
-        user_msg = build_user_message(report_date, date_cn, item_sets, sources, sina_text)
+        retrieval: list = []
+        if not args.skip_retrieval:
+            titles = [t for t in item_sets[0][1]][:15]
+            retrieval = retrieve_context(titles, per_item=3, cap=40)
+        user_msg = build_user_message(report_date, date_cn, item_sets, sources, sina_text, retrieval)
         md = llm_report(api_key, SYSTEM_PROMPT, user_msg, args.model)
         md = strip_scores(md)
         log(f"[生成] LLM 日报完成（{len(md)} 字符）")
     else:
         reason = "搜索/抓取未命中任何含条目的来源"
+        now_bj = datetime.now().strftime("%Y-%m-%d %H:%M")
+        if now_bj[:10] == report_date and int(now_bj[11:13]) < 19:
+            reason += (
+                f"（当前北京时间 {now_bj[11:16]}，当日节目 19:00 才播出，属正常无数据；"
+                "若需补跑请用 --date 指定有数据的日期）"
+            )
+        elif not sina_text:
+            reason += "（新浪 7x24 通道未命中：请检查网络/接口可达性，或该日确无播出）"
         md = make_missing_report(report_date, date_cn, sources, reason)
-        log(f"[生成] 数据缺失，生成说明日报（{len(md)} 字符）")
+        log(f"[生成] 数据缺失，生成说明日报（{len(md)} 字符）。原因：{reason}")
 
     # 3) 落盘
     out_path = Path(args.out) if args.out else (DEFAULT_REPORTS / f"{report_date}.md")
