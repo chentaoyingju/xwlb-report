@@ -521,32 +521,45 @@ def llm_report(api_key: str, system: str, user: str, preferred: str) -> str:
 
 # ---------------------------------------------------------------- 报告生成
 
-SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产出有逻辑、有边界、可证伪的结构化日报。
+SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产出有逻辑、有边界、可证伪、有预期差对照的结构化日报。
 
 【红线】
 1. 分析任何条目前先做【可分析性检查】：是否涉及"国家可分配财政资源、可执行行政指令、可量化产业数据"？未通过则只做一句话概况，归入日报末尾【程序性信息备忘】，标注"纯信息备案，无分析价值"，禁止深度拆解与臆测。
 2. 禁入类：纯礼仪性外交（除非涉重大贸易协定/技术解禁）、领导人形象宣传、未公开军事细节、无产业变量社会新闻、形式化党内会议程序。
 3. 禁止"暴涨""龙头""重大利好"等非理性词汇；禁止从政策直接跳跃到股价。
 4. 预测必须可证伪（时间窗口/若则条件/3个跟踪指标/证伪底线）。
+5. 【分数不外露】内部按五维评分定档，但输出严禁出现任何分数或分项数值。
 
-【分档】内部按五维评分（政策信号0-30/产业影响0-25/量化指标0-20/时效落地0-15/新提法0-10，总分100）确定等级，但【严禁在输出中出现任何分数或分项数值】：🔴重点关注=总评高、🟡一般关注=中、⚪常规报道=低（只列标题）。只输出等级标签，不输出分数。
+【统计口径字典（速览表必须标注口径）】
+- PMI：官方制造业PMI（季调后）；社零：社会消费品零售总额（含税，注明口径范围）；固投：固定资产投资（不含农户）；CPI/PPI：同比；进出口：海关口径（美元计价）。
+- 数据口径不明时注明"（口径待核）"；推算值标注"（推算）"。
+
+【官方用词热力词典】
+确保(90) / 切实加快(80) / 大力推动(70) / 推动(60) / 关注(40) / 提及(30)。
+- 🔴条目的"关键信号"须给出用词强度，如"用词强度：确保(90)，最高动员级"；
+- 单条核心用词权重<50 的条目倾向归入"程序性/应付式"（在备忘中注明"（用词强度低，程序性倾向）"）。
 
 【内容规范】
-- 🔴条目：内容摘要 / 关键信号 / 📊深度分析（政策意图、传导路径：政策→资金→订单→财报、受益画像）/ 🔎形势检索与推演 / 🔮规范预测（时间窗口【短期/中期/长期+明确年月】、核心条件"若…则…"、3个可观测跟踪指标、证伪底线"若X未在Y前发生则预测失效"）。
-- 🟡条目：内容摘要 / 💡简析（短期情绪或细分领域压力）/ 检索要点与判断（简短）/ 📌观察哨（出现何种信号则升级）。
+- 🔴条目：内容摘要 / 关键信号（含用词强度）/ 📈数据与预期（本条量化数据：边际增量=当月/季新增 vs 上期、三年复合增速2026vs2023【基数不足标"（基数不足）"】、市场一致预期【检索到给出并注来源，否则写"无共识预期"】）/ 估值与持仓约束（受益板块PE/PB近5年分位、公募超配、北向趋势——尽力检索，获取不到写"（数据源受限）"；分位>80%提示"利好边际效应递减"）/ 📊深度分析（政策意图、传导路径、受益画像）/ 🔎形势检索与推演 / 反身性拐点检查（警示：若该利好已被市场充分认知且相关板块近一月涨幅>15%，公布日可能为利好出尽拐点）/ 悲观情景压力测试（证伪条件后补：若证伪，则对以下X条预测产生二阶冲击：…）/ 🔮规范预测。
+- 🟡条目：内容摘要 / 💡简析 / 检索要点与判断 / 📌观察哨。
 - ⚪只列标题。
-- 【每个条目只能出现在一个分档中，严禁跨档重复】；同一条新闻去重合并后只归入最高分档。
+- 【每个条目只能出现在一个分档中，严禁跨档重复】。
 - 【来源纪律】数据来源仅引用用户提供的可信URL；检索无效时明确标注，严禁编造来源或混入无关站点。
 
-【形势检索与推演（🔴必做、🟡简做）】
-使用用户提供的"形势检索信息"（每条含来源 URL，均为可信来源）：对**每一条检索信息**做【计算推演】：
-结合具体数字估算影响量级、推演传导路径与时间节奏（如"若X增速为Y%，则Z环节订单/价格影响约W%"），
-必须有数字支撑或明确假设、可复核；然后给出【判断】：影响方向（利好/中性/承压）、强度（强/中/弱）、
-置信度（高/中/低）、需警惕的风险点。推演必须基于检索信息与公开数据，禁止无依据臆测；引用检索来源 URL。
-若某条目未提供形势检索信息或标注"无有效检索信息"，则写"未获取有效检索信息，推演基于公开常识并明确标注假设"，
-严禁用无关/编造来源硬凑推演。
+【舆情温度解读（🔴首条或官媒重点必做）】
+逆向分析：发布时点（月末/周末/重大会议前）、版面排位（头条/非头条）、是否配发评论员文章；
+判断为"预期管理"（稳定市场）或"动员令"（倒逼地方执行），一句话结论附在该条目"关键信号"后。
 
-【输出模板】严格按以下结构输出完整 Markdown（不要输出其他内容，不要输出分数）：
+【形势检索与推演（🔴必做、🟡简做）】
+使用用户提供的"形势检索信息"（可信来源，含URL）：对**每一条**做【计算推演】（结合数字估算量级/路径/节奏，可复核），
+再给【判断】（方向/强度/置信度/风险点）；引用URL。未提供或标注"无有效检索信息"时写
+"未获取有效检索信息，推演基于公开常识并明确标注假设"，严禁硬凑。
+
+【贝叶斯联动更新】
+用户会提供【历史状态】；若其中显示相关预测已证伪（如PMI≤49.5），则本条相关预测（如以旧换新全年销售额）按规则自动调整
+（上调15-20%），并在预测中注明"联动调整（因PMI证伪）：…"；反之（PMI验证）则下调并注明。
+
+【输出模板】（只输出主报告，不含【连续追踪板/数据口径与预期/政策博弈/市场流动性/待确认追踪】等增强板块——由第二段生成）
 # 📺 新闻联播日报 {YYYY年MM月DD日}
 
 ## 📊 今日概览
@@ -556,20 +569,26 @@ SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产�
 - 常规报道：XX条
 - 程序性信息备忘：XX条
 - 核心产业领域：XXX、XXX
+- 多空因子净得分：+X（偏多/偏空/对冲震荡）【明细见⚖️板块】
 
 ## 📋 今日关键数据速览
-| 指标 | 数值 | 单位/口径 | 出处条目 |
-|---|---|---|---|
-| … | … | … | … |
-（从当日条目提取 5-8 条最关键的量化指标；推算值标注"（推算）"；当日无可量化指标则写"—"）
+| 指标 | 数值 | 单位/口径 | 边际环比变动% | 三年复合增速 | 市场一致预期 | 出处条目 |
+|---|---|---|---|---|---|---|
+| … | … | … | … | … | … | … |
+（5-8行；从当日条目提取最关键的量化指标；边际增量=当月/季新增vs上期；推算标"（推算）"）
+- 口径说明：PMI=官方季调；社零=含税；……
 
 ## 🔴 重点关注
 ### 1. 【新闻标题】
 - **内容摘要**：…
-- **关键信号**：…
+- **关键信号**：（含用词强度；舆情温度解读）
+- **📈 数据与预期**：边际增量 / 三年CAGR / 市场一致预期
+- **估值与持仓约束**：…
 - **📊 深度分析**：政策意图 / 传导路径 / 受益画像
-- **🔎 形势检索与推演**：检索信息①（来源URL）→ 计算推演 → 判断；检索信息② → 推演 → 判断
-- **🔮 规范预测**：时间窗口 / 核心条件 / 跟踪指标①②③ / 证伪条件
+- **🔎 形势检索与推演**：检索信息①（URL）→ 推演 → 判断；……
+- **反身性拐点检查**：…
+- **悲观情景压力测试**：…
+- **🔮 规范预测**：时间窗口 / 核心条件（若…则…）/ 跟踪指标①②③ / 证伪条件
 
 ## 🟡 一般关注
 ### 1. 【新闻标题】
@@ -582,10 +601,12 @@ SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产�
 - 标题1；标题2；……
 
 ## 📎 程序性信息备忘
-- 一句话概况：……
+- 一句话概况：……（"会谈/访问/签署/启动"类标注"（待成果确认）"）
 
 ## 👀 下一步关注
-- 汇总各条观察哨 + 全局 2-3 个最值得跟踪的节点（时间 + 事件 + 影响）
+- 汇总各条观察哨 + 全局 2-3 个最值得跟踪的节点（时间+事件+影响）
+- 财报披露窗口期：每月下旬标注"当前处于财报披露窗口期"及业绩兑现度约束（若已知）
+- 非线性突变预警线：若以旧换新月均增速连续2个月下滑>5%，则触发"政策疲劳"情景、重设全年预期框架（作为规则说明）
 
 ## 📎 数据来源与免责声明
 - 来源：[URL1]、[URL2]、……（仅引用用户提供的可信来源URL，严禁编造或混入无关站点）
@@ -611,6 +632,7 @@ def build_user_message(
     item_sets: list,
     sources: list,
     retrieval: list | None = None,
+    state_text: str = "",
 ) -> str:
     lines = [
         f"请生成 {date_cn}《新闻联播》自动化日报。",
@@ -634,6 +656,10 @@ def build_user_message(
         lines.append("")
     else:
         lines.append("【形势检索信息】无（网络/搜索引擎受限，未能获取）；如需推演，请基于公开常识并明确标注假设。")
+        lines.append("")
+    if state_text:
+        lines.append("【历史状态（跨日）】")
+        lines.append(state_text)
         lines.append("")
     lines.append(
         "要求：按系统提示词规范完成可分析性检查、分档（只标🔴🟡⚪不标分数）、"
@@ -663,6 +689,243 @@ def make_missing_report(report_date: str, date_cn: str, sources: list, reason: s
 
 # ---------------------------------------------------------------- 主流程
 
+# ================================================================ 跨日状态与增强板块
+
+STATE_FILE = DEFAULT_REPORTS / "state.json"
+
+
+def load_state() -> dict:
+    if STATE_FILE.is_file():
+        try:
+            return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        except Exception:  # noqa: BLE001
+            pass
+    return {
+        "version": 2,
+        "lastUpdate": None,
+        "predictions": [],       # [{date,title,cond,falsify,window}]
+        "pending": [],           # [{date,item,deadline,status}]
+        "dataSeries": {},        # {指标: [{"date","value"}]}
+        "multifactor": {},       # {date, score, direction}
+    }
+
+
+def save_state(state: dict) -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        log(f"[状态] 保存失败: {exc}")
+
+
+def state_summary_text(state: dict) -> str:
+    """把跨日状态整理为给 LLM 的上下文文本（历史预测/数据序列/待确认池/多空得分）。"""
+    lines = [f"（最近更新：{state.get('lastUpdate') or '无'}）"]
+    preds = state.get("predictions") or []
+    if preds:
+        lines.append("【历史预测（近14天，供贝叶斯联动/连续追踪）】")
+        for p in preds[-14:]:
+            lines.append(f"- [{p.get('date')}] {p.get('title','')[:22]} | 证伪:{p.get('falsify','')[:40]}")
+    ds = state.get("dataSeries") or {}
+    if ds:
+        lines.append("【核心数据序列（近3周，供连续追踪板/边际对比）】")
+        for k, pts in list(ds.items())[:8]:
+            vals = "；".join(f"{p.get('date')}={p.get('value')}" for p in pts[-3:])
+            lines.append(f"- {k}: {vals}")
+    pend = state.get("pending") or []
+    if pend:
+        lines.append("【待确认事项（跨日追踪池）】")
+        for p in pend[-8:]:
+            lines.append(f"- [{p.get('date')}] {p.get('item','')[:28]}（状态：{p.get('status','待确认')}）")
+    mf = state.get("multifactor") or {}
+    if mf:
+        lines.append(f"【上日多空因子】净得分 {mf.get('score')}，方向 {mf.get('direction')}")
+    return "\n".join(lines)
+
+
+MARKET_QUERIES = [
+    "VIX 恐慌指数 最新", "美债10年期收益率 最新", "离岸人民币 CNH 汇率 今日",
+    "富时中国A50期指 夜盘", "韩国KOSPI 收盘 今日", "地方专项债 发行进度 2026",
+    "波罗的海干散货指数 BDI 最新", "全国港口 集装箱吞吐量 最新",
+]
+
+
+def retrieve_market_context(per_query: int = 3, cap: int = 20) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """检索市场/宏观数据（VIX/美债/CNH/A50/KOSPI/专项债/BDI/吞吐量），白名单过滤。"""
+    out: list[tuple[str, list[tuple[str, str, str]]]] = []
+    total = 0
+    for q in MARKET_QUERIES:
+        if total >= cap:
+            break
+        res = bing_search(q, n=per_query + 2)
+        if not any(is_trusted(u, t, s) for u, t, s in res):
+            d = ddg_search(q, n=per_query + 2)
+            if d:
+                res = d
+        hits = [r for r in res if is_trusted(*r)][:per_query]
+        if hits:
+            out.append((q, hits))
+            total += len(hits)
+        time.sleep(0.3)
+    log(f"[检索] 市场/宏观检索完成：{len(out)} 组，{total} 条可信信息")
+    return out
+
+
+SYSTEM_PROMPT_EXTRA = """你是新闻联播日报的"增强分析模块"。给定当日主报告、跨日历史状态与市场/宏观检索信息，
+生成以下 5 个增强板块（每个以标题开头，板块间空行分隔；不要输出其他内容；不要输出任何分数）：
+
+## 📋 连续追踪板
+- 列出 PMI、以旧换新销售额、发电耗煤、社零等核心指标的近3次数据轨迹（用历史状态+检索信息；缺失标注"—"）；
+- 一句话判断各指标"加速/减速/持平"。
+
+## 📈 数据口径与预期
+- **口径字典**：PMI=官方季调；社零=含税；固投=不含农户；CPI/PPI=同比；进出口=海关美元计价（固定口径说明，含"口径待核"项）；
+- **市场一致预期对照**：对当日关键数据给出 Wind/彭博/路透 调查中值（检索到则标注来源；否则"无共识预期"）；
+- **高频微观交叉验证**：从当日联播快讯提取 BDI/集装箱运价/港口吞吐量/钢材价格等高频词，作为核心预测的辅助验证；
+- **配套资金到位率**：结合专项债发行进度/财政存款估算中央+地方补贴实际拨付比例（数据不足写"待月末数据"）。
+
+## ⚖️ 政策博弈与风险
+- **政策矛盾矩阵**：若同日存在"内生修复（如PMI改善）"与"外生托底（强刺激延续）"并存，强制分析"刺激退坡概率"并给权重判断；否则写"无显著矛盾"；
+- **多空因子净得分**：将当日主要利好/利空因子按影响力赋分（±1~5），列出明细并汇总净得分，判断当日风险偏好方向（偏多/偏空/对冲震荡）；
+- **官方用词热力汇总**：列出当日用词强度最高的 3 条及权重；
+- **悲观情景连锁**：若任一🔴预测证伪，列出对哪些预测产生二阶冲击及大致下修幅度；
+- **贝叶斯联动更新**：基于历史状态中的证伪信息，说明本次对哪些预测做了联动调整。
+
+## 📌 待确认事项追踪
+- 列出历史"待成果确认"事项（会谈/访问/签署/启动）的最新状态：超过24小时未确认 → 标注"无实质进展（逾期未确认）"；
+- 新增当日"会谈/访问/签署/启动"类事项入池，标注"待成果确认（+24h检查）"。
+
+## 🌐 市场与流动性（隔夜观测）
+- **宏观流动性风险评级**：依据美日国债利差、离岸CNH隐含波动率、VIX 给出"宽松/中性/紧缩"三档评级，并说明对当日利好结论的折扣系数（紧缩档×0.7）；
+- **隔夜观测窗口**：列出次日开盘前需检查的 5 大指标：A50期指（涨跌幅）、离岸CNH（点位）、美债10Y收益率、原油/黄金波动率、韩国KOSPI开盘（亚太情绪风向标）。
+"""
+
+
+def assemble_report(md_main: str, extra: str) -> str:
+    """把增强板块按标题插回主报告的固定位置。"""
+    boards: dict[str, str] = {}
+    for h in (
+        "## 📋 连续追踪板",
+        "## 📈 数据口径与预期",
+        "## ⚖️ 政策博弈与风险",
+        "## 📌 待确认事项追踪",
+        "## 🌐 市场与流动性",
+    ):
+        idx = extra.find(h)
+        if idx >= 0:
+            nxt = extra.find("\n## ", idx + len(h))
+            boards[h] = extra[idx : nxt if nxt >= 0 else len(extra)].rstrip()
+
+    def insert_before(md: str, anchor: str, block: str) -> str:
+        if not block:
+            return md
+        i = md.find(anchor)
+        return md[:i] + block + "\n\n" + md[i:] if i >= 0 else md
+
+    md = insert_before(md_main, "## 📋 今日关键数据速览", boards.get("## 📋 连续追踪板", ""))
+    md = insert_before(
+        md, "## 🔴 重点关注",
+        "\n\n".join(x for x in (boards.get("## 📈 数据口径与预期", ""), boards.get("## ⚖️ 政策博弈与风险", "")) if x),
+    )
+    md = insert_before(md, "## 👀 下一步关注", boards.get("## 📌 待确认事项追踪", ""))
+    md = insert_before(md, "## 📎 数据来源与免责声明", boards.get("## 🌐 市场与流动性", ""))
+    return md
+
+
+def extract_and_update_state(md: str, report_date: str, state: dict) -> None:
+    """从生成的主报告中抽取预测/待确认/数据序列/多空得分，合并进跨日状态。"""
+    preds = state.setdefault("predictions", [])
+    pend = state.setdefault("pending", [])
+    ds = state.setdefault("dataSeries", {})
+
+    for b in re.split(r"\n### ", "\n" + md)[1:]:
+        title = b.split("\n", 1)[0].strip("【】 \t")
+        cond = re.search(r"核心条件[:：]\s*(.+)", b)
+        fals = re.search(r"证伪条件[:：]\s*(.+)", b)
+        win = re.search(r"时间窗口[:：]\s*(.+)", b)
+        if fals or cond:
+            preds.append({
+                "date": report_date,
+                "title": title[:50],
+                "cond": (cond.group(1).strip()[:80] if cond else ""),
+                "falsify": (fals.group(1).strip()[:120] if fals else ""),
+                "window": (win.group(1).strip()[:40] if win else ""),
+            })
+    preds[:] = preds[-40:]
+
+    mi = md.find("## 📎 程序性信息备忘")
+    if mi >= 0:
+        seg = md[mi:md.find("\n## ", mi + 3)]
+        for m in re.finditer(r"([^：\n]{2,40}(?:会谈|访问|签署|启动)[^：\n]*)", seg):
+            item = m.group(1).strip().strip("：:")
+            if item and not any(p.get("item") == item and p.get("date") == report_date for p in pend):
+                pend.append({"date": report_date, "item": item[:60], "deadline": "+24h", "status": "待确认"})
+    today = datetime.strptime(report_date, "%Y-%m-%d").date()
+    for p in pend:
+        if p.get("status") == "待确认" and p.get("date"):
+            try:
+                d0 = datetime.strptime(p["date"], "%Y-%m-%d").date()
+                if (today - d0).days >= 1:
+                    p["status"] = "无实质进展（逾期未确认）"
+            except ValueError:
+                pass
+    pend[:] = pend[-30:]
+
+    ti = md.find("## 📋 今日关键数据速览")
+    if ti >= 0:
+        seg = md[ti:md.find("\n## ", ti + 3)]
+        for row in re.finditer(r"^\|\s*([^|]{2,24})\s*\|\s*([^|]{1,24})\s*\|", seg, re.M):
+            k = row.group(1).strip()
+            v = row.group(2).strip()
+            if k and v and k != "指标":
+                seq = ds.setdefault(k[:12], [])
+                seq.append({"date": report_date, "value": v[:30]})
+                seq[:] = seq[-6:]
+
+    mm = re.search(r"多空因子净得分[:：]\s*([+-]?\d+)\s*（(.+?)）", md)
+    if mm:
+        state["multifactor"] = {"date": report_date, "score": mm.group(1), "direction": mm.group(2).strip()}
+
+    state["lastUpdate"] = report_date
+    save_state(state)
+    log(f"[状态] 已更新（预测{len(preds)}条/待确认{len(pend)}项/序列{len(ds)}组）")
+
+
+def verify_report_sources(md: str) -> str:
+    """4.4 来源链接有效性核验：GET 检查文末来源区 URL；4xx/5xx 失效剔除，网络受限则标注未确认。"""
+    mi = md.find("## 📎 数据来源与免责声明")
+    if mi < 0:
+        return md
+    head, tail = md[:mi], md[mi:]
+    urls = list(dict.fromkeys(re.findall(r"https?://[^\s）)」\]》]+", tail)))[:10]
+    bad: set[str] = set()
+    unsure: set[str] = set()
+    for u in urls:
+        uu = u.rstrip("。，；,;")
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(uu, headers={"User-Agent": UA}, method="GET"),
+                timeout=6,
+                context=ssl.create_default_context(),
+            ) as r:
+                if r.status >= 400:
+                    bad.add(uu)
+        except urllib.error.HTTPError as exc:
+            if exc.code >= 400:
+                bad.add(uu)
+            else:
+                unsure.add(uu)
+        except Exception:  # noqa: BLE001
+            unsure.add(uu)
+    if bad or unsure:
+        log(f"[核验] 失效 {len(bad)} 个、未确认 {len(unsure)} 个")
+        for u in bad:
+            tail = tail.replace(u, f"{u}（链接失效，已剔除）")
+        for u in unsure:
+            tail = tail.replace(u, f"{u}（核验受限，未确认）")
+    return head + tail
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="新闻联播日报 · 独立离线执行")
     p.add_argument("--date", default=None, help="YYYY-MM-DD，默认今天")
@@ -674,6 +937,7 @@ def main() -> int:
     p.add_argument("--api-key", default=None, help="DeepSeek API Key（默认读环境变量或 ~/.dsh/.credentials.yaml）")
     p.add_argument("--model", default="deepseek-chat", help="首选模型（长任务推荐 deepseek-chat）")
     p.add_argument("--skip-retrieval", action="store_true", help="跳过形势检索（调试用）")
+    p.add_argument("--skip-extra", action="store_true", help="跳过增强板块（第二段LLM，调试用）")
     args = p.parse_args()
 
     report_date = args.date or date.today().isoformat()
@@ -691,13 +955,17 @@ def main() -> int:
         write_log(f"=== 结束 {report_date} skip(marker) ===")
         return 0
 
+    # 0.5) 跨日状态
+    state = load_state()
+    state_text = state_summary_text(state)
+
     # 1) 采集
     item_sets, sources = acquire(report_date, date_cn)
     if args.fetch_only:
         log(f"[采集] 完成，来源 {len(sources)}，条目集 {len(item_sets)}。fetch-only 模式退出。")
         return 0
 
-    # 2) 组装内容（含形势检索 → 逐条推演 → 判断）
+    # 2) 组装内容（主报告 → 状态抽取 → 增强板块 → 装配）
     if item_sets and item_sets[0][1]:
         api_key = resolve_api_key(args.api_key)
         if not api_key:
@@ -707,10 +975,35 @@ def main() -> int:
         if not args.skip_retrieval:
             titles = [t for t in item_sets[0][1]][:15]
             retrieval = retrieve_context(titles, per_item=3, cap=40)
-        user_msg = build_user_message(report_date, date_cn, item_sets, sources, retrieval)
-        md = llm_report(api_key, SYSTEM_PROMPT, user_msg, args.model)
-        md = strip_scores(md)
-        log(f"[生成] LLM 日报完成（{len(md)} 字符）")
+        user_msg = build_user_message(report_date, date_cn, item_sets, sources, retrieval, state_text)
+        md_main = llm_report(api_key, SYSTEM_PROMPT, user_msg, args.model)
+        log(f"[生成] 主报告完成（{len(md_main)} 字符）")
+
+        # 状态抽取（主报告基础上），并刷新供增强板块使用
+        extract_and_update_state(md_main, report_date, state)
+        state_text = state_summary_text(state)
+
+        if args.skip_extra:
+            md = md_main
+        else:
+            try:
+                market = retrieve_market_context() if not args.skip_retrieval else []
+                mk_lines = []
+                for q, hits in market:
+                    mk_lines.append(f"◆ {q}")
+                    for u, t, s in hits:
+                        mk_lines.append(f"   - {t[:50]} | {u}" + (f" | {s[:80]}" if s else ""))
+                extra_user = (
+                    f"当日主报告：\n\n{md_main}\n\n"
+                    f"【跨日历史状态】\n{state_text}\n\n"
+                    f"【市场/宏观检索信息】\n" + ("\n".join(mk_lines) if mk_lines else "（未获取可信市场信息）")
+                )
+                extra = llm_report(api_key, SYSTEM_PROMPT_EXTRA, extra_user, args.model)
+                md = assemble_report(md_main, extra)
+                log("[生成] 增强板块完成，已装配")
+            except Exception as exc:  # noqa: BLE001
+                log(f"[警告] 增强板块生成失败，仅输出主报告: {exc}")
+                md = md_main
     else:
         reason = "搜索/抓取未命中任何含条目的来源"
         now_bj = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -724,13 +1017,17 @@ def main() -> int:
         md = make_missing_report(report_date, date_cn, sources, reason)
         log(f"[生成] 数据缺失，生成说明日报（{len(md)} 字符）。原因：{reason}")
 
-    # 3) 落盘
+    # 3) 来源核验 + 去分
+    md = verify_report_sources(md)
+    md = strip_scores(md)
+
+    # 4) 落盘
     out_path = Path(args.out) if args.out else (DEFAULT_REPORTS / f"{report_date}.md")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(md, encoding="utf-8")
     log(f"[落盘] {out_path}（{len(md) / 1024:.1f} KB）")
 
-    # 4) 推送（去重由 do_send 的 marker 处理）
+    # 5) 推送（去重由 do_send 的 marker 处理）
     cfg = load_config(Path(args.config))
     code = do_send(report_date, cfg, report_path=out_path, dry_run=args.dry_run, force=args.force)
     write_log(f"=== 结束 {report_date} exit={code}（dry_run={args.dry_run}）===")
