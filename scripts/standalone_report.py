@@ -171,30 +171,85 @@ def ddg_search(query: str, n: int = 6) -> list[tuple[str, str, str]]:
     return out
 
 
-def retrieve_context(item_titles: list[str], per_item: int = 3, cap: int = 40) -> list[tuple[str, list[tuple[str, str, str]]]]:
-    """结合当前形势检索：对关键条目标题做 Bing 检索，收集 1-3 条相关当前信息。
+# ---- 可信来源白名单（形势检索与来源净化共用；按用户要求不含新浪）----
+TRUSTED_HOSTS = re.compile(
+    r"(tv\.cctv|api\.cntv|cctv\.com|cls\.cn|eastmoney|nbd\.com\.cn|stcn\.com|thepaper|"
+    r"21jingji|yicai\.com|jiemian|zhitongcaijing|10jqka|wallstreetcn|cfi\.net\.cn|"
+    r"gov\.cn|xinhuanet|people\.com\.cn|qstheory|iqilu|news\.qq\.com|sohu|央视官方)"
+)
+BLOCKED_HOSTS = re.compile(
+    r"(baike\.baidu|zhihu|jingyan\.baidu|bilibili|hanyuguoxue|chagushici|zhidao|"
+    r"douyin|youku|iqiyi|tiktok|reddit|bbc\.com|zhongwen/simp|xinjiangtrip|map\.baidu|"
+    r"skillhub|osta\.org|youth\.cn)"
+)
 
-    返回 [(条目标题, [(url, 标题, 摘要), ...]), ...]，供 LLM 逐条计算推演并给出判断。
+
+def is_trusted(url: str, title: str = "", snippet: str = "") -> bool:
+    """白名单判定：命中黑名单直接拒绝；命中可信站点返回 True（宁可没有，不要垃圾）。"""
+    u = (url or "").lower()
+    if BLOCKED_HOSTS.search(u):
+        return False
+    return bool(TRUSTED_HOSTS.search(u))
+
+
+def build_search_queries(title: str) -> list[str]:
+    """条目标题 → 关键词化检索查询：去系列前缀/括号/虚词/时间词，保留核心名词短语。"""
+    t = re.sub(r"【[^】]*】", "", title)
+    t = re.sub(r"[（(][^）)]*[）)]", "", t)
+    for junk in (
+        "我国", "中国", "全国", "国家", "中央", "本市", "今年", "上半年", "下半年",
+        "前7个月", "前七个月", "前7月", "到2030年", "将", "正在", "推出", "加快",
+        "持续", "推进", "推动", "落实", "强化", "进一步", "力争", "预计", "有望",
+        "首次", "突破", "达到", "超过", "实现", "助力", "满足", "健全", "完善",
+        "提升", "加大", "正式", "全面",
+    ):
+        t = t.replace(junk, "")
+    t = re.sub(r"\s+", "", t)
+    t = re.sub(r"[^\u4e00-\u9fff0-9a-zA-Z%]+", "", t)
+    if not t:  # 全被虚词/时间词滤掉时退回标题原文
+        t = re.sub(r"[^\u4e00-\u9fff0-9a-zA-Z]+", "", title)
+    if len(t) > 24:
+        t = t[:24]
+    year = str(datetime.now().year)
+    return [f"{t} 最新", f"{t} 政策 {year}"]
+
+
+def retrieve_context(item_titles: list[str], per_item: int = 3, cap: int = 40) -> list[tuple[str, list[tuple[str, str, str]]]]:
+    """结合当前形势检索：关键词查询 + 可信来源白名单过滤，收集 1-3 条相关当前信息。
+
+    仅保留可信站点结果；某条目无可信信息则跳过（不硬凑）。返回 [(条目标题, [(url,标题,摘要),...]), ...]。
     """
     out: list[tuple[str, list[tuple[str, str, str]]]] = []
     total = 0
     for title in item_titles:
         if total >= cap:
             break
-        q = re.sub(r"[\s【】\[\]（）()：:]+", " ", title).strip()[:40]
-        if not q:
-            continue
-        log(f"[检索] 形势检索：{q[:36]}")
-        res = bing_search(q + " 最新", n=per_item + 2)
-        if not res:
-            res = bing_search(q, n=per_item + 2)
-        if not res:
-            res = ddg_search(q, n=per_item + 2)
-        if res:
-            out.append((title, res[:per_item]))
-            total += len(res[:per_item])
+        hits: list[tuple[str, str, str]] = []
+        for q in build_search_queries(title):
+            res = bing_search(q, n=per_item + 3)
+            if not any(is_trusted(u, t, s) for u, t, s in res):
+                d = ddg_search(q, n=per_item + 3)
+                if d:
+                    res = d
+            hits.extend(r for r in res if is_trusted(*r))
+            if len(hits) >= per_item:
+                break
+            time.sleep(0.3)
+        seen_u: set[str] = set()
+        kept: list[tuple[str, str, str]] = []
+        for r in hits:
+            if r[0] not in seen_u:
+                seen_u.add(r[0])
+                kept.append(r)
+        kept = kept[:per_item]
+        if kept:
+            out.append((title, kept))
+            total += len(kept)
+            log(f"[检索] {title[:24]} → {len(kept)} 条可信信息")
+        else:
+            log(f"[检索] {title[:24]} → 无可信来源信息（已过滤/检索失败）")
         time.sleep(0.3)
-    log(f"[检索] 形势检索完成：覆盖 {len(out)} 个条目，共 {total} 条信息")
+    log(f"[检索] 形势检索完成：覆盖 {len(out)} 个条目，共 {total} 条可信信息")
     return out
 
 
@@ -372,10 +427,7 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
             item_sets.append((url, items))
     # 可信来源过滤：仅保留央视/财联社/东财/澎湃/齐鲁/智通/腾讯/搜狐/政府网等来源的条目集，
     # 避免 Bing 垃圾结果（BBC/Reddit/门户首页）生成假日报
-    trusted = re.compile(
-        r"(tv\.cctv|api\.cntv|cctv\.com|cls\.cn|eastmoney|thepaper|iqilu|zhitongcaijing|news\.qq\.com|sohu|gov\.cn|央视官方)"
-    )
-    item_sets = [s for s in item_sets if trusted.search(s[0])]
+    item_sets = [s for s in item_sets if is_trusted(s[0])]
     # 若页面不理想，用命中日期的摘要补条目（同样仅限可信来源）
     if len(item_sets) < 2:
         for url, title, snippet in dated[:12]:
@@ -384,7 +436,8 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
                 item_sets.append((f"{url} (摘要)", items))
     item_sets.sort(key=lambda x: -len(x[1]))
     log(f"[采集] 可用条目集 {len(item_sets)} 个（最大 {len(item_sets[0][1]) if item_sets else 0} 条）")
-    return item_sets, ordered[:12]
+    sources = [s for s in ordered[:12] if is_trusted(s[0])]
+    return item_sets, sources
 
 
 # ---------------------------------------------------------------- DeepSeek API
@@ -483,12 +536,15 @@ SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产�
 - 🟡条目：内容摘要 / 💡简析（短期情绪或细分领域压力）/ 检索要点与判断（简短）/ 📌观察哨（出现何种信号则升级）。
 - ⚪只列标题。
 - 【每个条目只能出现在一个分档中，严禁跨档重复】；同一条新闻去重合并后只归入最高分档。
+- 【来源纪律】数据来源仅引用用户提供的可信URL；检索无效时明确标注，严禁编造来源或混入无关站点。
 
 【形势检索与推演（🔴必做、🟡简做）】
-使用用户提供的"形势检索信息"（每条含来源 URL），对**每一条检索信息**做【计算推演】：
+使用用户提供的"形势检索信息"（每条含来源 URL，均为可信来源）：对**每一条检索信息**做【计算推演】：
 结合具体数字估算影响量级、推演传导路径与时间节奏（如"若X增速为Y%，则Z环节订单/价格影响约W%"），
 必须有数字支撑或明确假设、可复核；然后给出【判断】：影响方向（利好/中性/承压）、强度（强/中/弱）、
 置信度（高/中/低）、需警惕的风险点。推演必须基于检索信息与公开数据，禁止无依据臆测；引用检索来源 URL。
+若某条目未提供形势检索信息或标注"无有效检索信息"，则写"未获取有效检索信息，推演基于公开常识并明确标注假设"，
+严禁用无关/编造来源硬凑推演。
 
 【输出模板】严格按以下结构输出完整 Markdown（不要输出其他内容，不要输出分数）：
 # 📺 新闻联播日报 {YYYY年MM月DD日}
@@ -500,6 +556,12 @@ SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产�
 - 常规报道：XX条
 - 程序性信息备忘：XX条
 - 核心产业领域：XXX、XXX
+
+## 📋 今日关键数据速览
+| 指标 | 数值 | 单位/口径 | 出处条目 |
+|---|---|---|---|
+| … | … | … | … |
+（从当日条目提取 5-8 条最关键的量化指标；推算值标注"（推算）"；当日无可量化指标则写"—"）
 
 ## 🔴 重点关注
 ### 1. 【新闻标题】
@@ -522,8 +584,11 @@ SYSTEM_PROMPT = """你是严谨的新闻联播政策分析与推演助手，产�
 ## 📎 程序性信息备忘
 - 一句话概况：……
 
+## 👀 下一步关注
+- 汇总各条观察哨 + 全局 2-3 个最值得跟踪的节点（时间 + 事件 + 影响）
+
 ## 📎 数据来源与免责声明
-- 来源：[URL1]、[URL2]、……（使用用户提供的来源URL）
+- 来源：[URL1]、[URL2]、……（仅引用用户提供的可信来源URL，严禁编造或混入无关站点）
 - 生成时间：YYYY-MM-DD HH:MM
 - 重要声明：本报告基于公开政策信息推演，所有预测均附有证伪条件，不构成直接投资建议。
 """
