@@ -1,6 +1,6 @@
 # 新闻联播日报 · 云端执行（GitHub Actions）
 # 每天 12:00 UTC = 北京时间 20:00 自动运行独立离线脚本：
-#   采集（新浪7x24 + Bing）→ 形势检索 → DeepSeek API 分析（含逐条计算推演与判断）
+#   采集（央视官方API + Bing）→ 形势检索 → DeepSeek API 分析（含逐条计算推演与判断）
 #   → 生成 reports/YYYY-MM-DD.md → SMTP 推送
 # 凭据全部通过 GitHub Secrets 加密注入（环境变量），不写入仓库。
 name: daily-xinwenlianbo-report

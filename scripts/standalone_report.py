@@ -229,77 +229,6 @@ def has_date_evidence(url: str, title: str, snippet: str, pat: re.Pattern) -> bo
     return bool(pat.search(url + " " + title + " " + snippet))
 
 
-def acquire_sina_7x24(report_date: str) -> tuple[str | None, str | None]:
-    """新浪 7x24 直播流（zhibo_id=152）检索当日《新闻联播》主要内容，返回 (完整条目文本, wap文章URL)。
-
-    步骤：翻页找到当日《新闻联播》主要内容帖 id → 抓取 wap 文章页完整正文（rich_text 会被截断）。
-    找不到返回 (None, None)。
-    """
-    target_id: int | None = None
-    scanned = 0
-    api_status: str = "?"
-    consecutive_fail = 0
-    for page in range(1, 13):
-        url = (
-            "https://zhibo.sina.com.cn/api/zhibo/feed"
-            f"?page={page}&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1"
-        )
-        try:
-            j = json.loads(
-                http_get(url, timeout=12, headers={"Referer": "https://zhibo.sina.com.cn/"}).decode("utf-8", "replace")
-            )
-        except Exception as exc:  # noqa: BLE001
-            log(f"[采集] 新浪 7x24 第 {page} 页失败: {exc}")
-            consecutive_fail += 1
-            if page == 1 or consecutive_fail >= 3:
-                log("[采集] 新浪 7x24 连续失败/首页失败（疑似 IP 受限），中止扫描")
-                return None, None
-            time.sleep(1)
-            continue
-        consecutive_fail = 0
-        status = (j.get("result") or {}).get("status") or {}
-        api_status = str(status)
-        items = ((j.get("result") or {}).get("data") or {}).get("feed") or {}
-        lst = items.get("list") or []
-        scanned += len(lst)
-        if not lst:
-            log(f"[采集] 新浪 7x24 第 {page} 页为空（API status={api_status}），中止扫描")
-            break
-        for it in lst:
-            rt = it.get("rich_text") or ""
-            created = (it.get("create_time") or "")[:10]
-            if created == report_date and "《新闻联播》" in rt and "主要内容" in rt:
-                target_id = it.get("id")
-                break
-        if target_id:
-            break
-        time.sleep(0.4)
-    if not target_id:
-        log(
-            f"[采集] 新浪 7x24 未命中（翻页 1-12，共扫描 {scanned} 条，API status={api_status}；"
-            "可能原因：接口对当前 IP 返回受限内容 / 当日帖子不含《新闻联播》主要内容 / 条目滚出窗口）"
-        )
-        return None, None
-
-    # 抓取 wap 文章页完整正文（rich_text 常被截断为 ~660 字符）
-    wap_url = f"https://wap.cj.sina.cn/pc/7x24/{target_id}"
-    for attempt in range(2):
-        try:
-            text = strip_html(decode(http_get(wap_url, timeout=25)))
-        except Exception as exc:  # noqa: BLE001
-            log(f"[采集] 新浪 wap 文章页抓取失败（第 {attempt + 1} 次）: {exc}")
-            time.sleep(2)
-            continue
-        idx = text.find("《新闻联播》主要内容")
-        if idx < 0:
-            idx = text.find("主要内容")
-        seg = text[idx : idx + 3000] if idx >= 0 else text
-        if len(extract_items(seg)) >= 8:
-            log(f"[采集] 新浪 7x24 完整清单（item {target_id}，{len(seg)} 字符）")
-            return seg, wap_url
-    return None, None
-
-
 CCTV_COLUMN_API = (
     "https://api.cntv.cn/NewVideo/getVideoListByColumn"
     "?id=TOPC1451528971114112&n=30&sort=desc&p=1&mode=0&serviceId=tvcctv"
@@ -339,15 +268,13 @@ def acquire_cctv_api(report_date: str) -> tuple[str | None, str | None]:
 
 
 def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]], list[tuple[str, str, str]], str | None]:
-    """采集当日条目。返回 (item_sets 按条数降序, sources, sina_authoritative_text)。"""
+    """采集当日条目。返回 (item_sets 按条数降序, sources)。"""
     ymd = report_date.replace("-", "")
     y, m, d = (int(x) for x in report_date.split("-"))
     pat = date_pattern(report_date, m, d)
 
     # 0) 主通道：央视官方 API（权威、不依赖搜索引擎）
     cctv_text, cctv_url = acquire_cctv_api(report_date)
-    # 1) 次通道：新浪 7x24（部分日期缺失，仅作补充）
-    sina_text, sina_url = acquire_sina_7x24(report_date)
 
     queries = [
         f"site:tv.cctv.com 新闻联播 {ymd}",
@@ -393,9 +320,6 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
     if cctv_url:
         candidates.append((cctv_url, "央视官方《新闻联播》节目页", (cctv_text or "")[:120]))
         seen.add(cctv_url.split("?")[0])
-    if sina_url:
-        candidates.append((sina_url, "新浪7x24《新闻联播》主要内容", (sina_text or "")[:120]))
-        seen.add(sina_url.split("?")[0])
     local_tv = re.compile(
         r"(北京|上海|天津|重庆|河北|山西|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|"
         r"河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海|内蒙古|广西|西藏|宁夏|新疆|兵团|深圳)新闻联播"
@@ -442,17 +366,14 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
     if cctv_text:
         items = [it for it in extract_items(cctv_text) if not boilerplate.search(it)]
         item_sets.append(("央视官方口径(完整清单)", items))
-    if sina_text:
-        items = [it for it in extract_items(sina_text) if not boilerplate.search(it)]
-        item_sets.append(("新浪7x24官方口径(完整清单)", items))
     for url, text in page_texts:
         items = [it for it in extract_items(text) if not boilerplate.search(it)]
         if len(items) >= 8:
             item_sets.append((url, items))
-    # 可信来源过滤：仅保留央视/新浪/财联社/东财/澎湃/齐鲁/智通/腾讯/搜狐/政府网等来源的条目集，
+    # 可信来源过滤：仅保留央视/财联社/东财/澎湃/齐鲁/智通/腾讯/搜狐/政府网等来源的条目集，
     # 避免 Bing 垃圾结果（BBC/Reddit/门户首页）生成假日报
     trusted = re.compile(
-        r"(tv\.cctv|api\.cntv|cctv\.com|cls\.cn|sina|eastmoney|thepaper|iqilu|zhitongcaijing|news\.qq\.com|sohu|gov\.cn|央视官方|新浪7x24)"
+        r"(tv\.cctv|api\.cntv|cctv\.com|cls\.cn|eastmoney|thepaper|iqilu|zhitongcaijing|news\.qq\.com|sohu|gov\.cn|央视官方)"
     )
     item_sets = [s for s in item_sets if trusted.search(s[0])]
     # 若页面不理想，用命中日期的摘要补条目（同样仅限可信来源）
@@ -463,7 +384,7 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
                 item_sets.append((f"{url} (摘要)", items))
     item_sets.sort(key=lambda x: -len(x[1]))
     log(f"[采集] 可用条目集 {len(item_sets)} 个（最大 {len(item_sets[0][1]) if item_sets else 0} 条）")
-    return item_sets, ordered[:12], sina_text
+    return item_sets, ordered[:12]
 
 
 # ---------------------------------------------------------------- DeepSeek API
@@ -624,7 +545,6 @@ def build_user_message(
     date_cn: str,
     item_sets: list,
     sources: list,
-    sina_text: str | None,
     retrieval: list | None = None,
 ) -> str:
     lines = [
@@ -635,10 +555,6 @@ def build_user_message(
     for i, (u, t, s) in enumerate(sources, 1):
         lines.append(f"{i}. {t or u} | {u}" + (f" | 摘要：{s[:100]}" if s else ""))
     lines.append("")
-    if sina_text:
-        lines.append("【当日官方口径完整清单（新浪7x24，权威，以此为准）】")
-        lines.append(sina_text[:3000])
-        lines.append("")
     lines.append("【各来源抓取的编号条目（供你合并核对，可能有重复/缺漏/繁体，请按官方口径整理为简体）】")
     for url, items in item_sets[:3]:
         lines.append(f"--- 来源: {url[:80]}（{len(items)} 条）---")
@@ -711,9 +627,9 @@ def main() -> int:
         return 0
 
     # 1) 采集
-    item_sets, sources, sina_text = acquire(report_date, date_cn)
+    item_sets, sources = acquire(report_date, date_cn)
     if args.fetch_only:
-        log(f"[采集] 完成，来源 {len(sources)}，条目集 {len(item_sets)}，新浪完整清单={'有' if sina_text else '无'}。fetch-only 模式退出。")
+        log(f"[采集] 完成，来源 {len(sources)}，条目集 {len(item_sets)}。fetch-only 模式退出。")
         return 0
 
     # 2) 组装内容（含形势检索 → 逐条推演 → 判断）
@@ -726,7 +642,7 @@ def main() -> int:
         if not args.skip_retrieval:
             titles = [t for t in item_sets[0][1]][:15]
             retrieval = retrieve_context(titles, per_item=3, cap=40)
-        user_msg = build_user_message(report_date, date_cn, item_sets, sources, sina_text, retrieval)
+        user_msg = build_user_message(report_date, date_cn, item_sets, sources, retrieval)
         md = llm_report(api_key, SYSTEM_PROMPT, user_msg, args.model)
         md = strip_scores(md)
         log(f"[生成] LLM 日报完成（{len(md)} 字符）")
@@ -738,8 +654,8 @@ def main() -> int:
                 f"（当前北京时间 {now_bj[11:16]}，当日节目 19:00 才播出，属正常无数据；"
                 "若需补跑请用 --date 指定有数据的日期）"
             )
-        elif not sina_text:
-            reason += "（新浪 7x24 通道未命中：请检查网络/接口可达性，或该日确无播出）"
+        else:
+            reason += "（央视官方通道未命中：请检查网络可达性，或该日确无播出）"
         md = make_missing_report(report_date, date_cn, sources, reason)
         log(f"[生成] 数据缺失，生成说明日报（{len(md)} 字符）。原因：{reason}")
 
