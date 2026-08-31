@@ -312,25 +312,30 @@ def acquire_cctv_api(report_date: str) -> tuple[str | None, str | None]:
     权威、简体、不依赖搜索引擎、全球可访问；brief 字段即"本期节目主要内容"完整编号列表。
     """
     ymd = report_date.replace("-", "")
-    try:
-        j = json.loads(
-            http_get(CCTV_COLUMN_API, timeout=15, headers={"Referer": "https://tv.cctv.com/lm/xwlb/"}).decode(
-                "utf-8", "replace"
+    last_exc: str = ""
+    for attempt in range(2):
+        try:
+            j = json.loads(
+                http_get(CCTV_COLUMN_API, timeout=20, headers={"Referer": "https://tv.cctv.com/lm/xwlb/"}).decode(
+                    "utf-8", "replace"
+                )
             )
-        )
-    except Exception as exc:  # noqa: BLE001
-        log(f"[采集] 央视 API 请求失败: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            last_exc = f"{type(exc).__name__}: {exc}"
+            log(f"[采集] 央视 API 请求失败（第 {attempt + 1} 次）: {exc}")
+            continue
+        lst = ((j.get("data") or {}).get("list")) or []
+        cands = [it for it in lst if ymd in (it.get("title") or "")]
+        if cands:
+            it = next((x for x in cands if "19:00" in x.get("title", "")), cands[0])
+            brief = (it.get("brief") or "").strip()
+            url = it.get("url") or ""
+            log(f"[采集] 央视 API 命中：{it.get('title')}（brief {len(brief)} 字符）")
+            return brief, url
+        log(f"[采集] 央视 API 未找到 {report_date} 节目（返回 {len(lst)} 条）")
         return None, None
-    lst = ((j.get("data") or {}).get("list")) or []
-    cands = [it for it in lst if ymd in (it.get("title") or "")]
-    if not cands:
-        log(f"[采集] 央视 API 未找到 {report_date} 节目（返回 {len(lst)} 条，最近为 {((lst[0].get('title') or '') if lst else '无')}）")
-        return None, None
-    it = next((x for x in cands if "19:00" in x.get("title", "")), cands[0])
-    brief = (it.get("brief") or "").strip()
-    url = it.get("url") or ""
-    log(f"[采集] 央视 API 命中：{it.get('title')}（brief {len(brief)} 字符）")
-    return brief, url
+    log(f"[采集] 央视 API 两次尝试均失败: {last_exc}")
+    return None, None
 
 
 def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]], list[tuple[str, str, str]], str | None]:
@@ -444,7 +449,13 @@ def acquire(report_date: str, date_cn: str) -> tuple[list[tuple[str, list[str]]]
         items = [it for it in extract_items(text) if not boilerplate.search(it)]
         if len(items) >= 8:
             item_sets.append((url, items))
-    # 若页面不理想，用命中日期的摘要补条目
+    # 可信来源过滤：仅保留央视/新浪/财联社/东财/澎湃/齐鲁/智通/腾讯/搜狐/政府网等来源的条目集，
+    # 避免 Bing 垃圾结果（BBC/Reddit/门户首页）生成假日报
+    trusted = re.compile(
+        r"(tv\.cctv|api\.cntv|cctv\.com|cls\.cn|sina|eastmoney|thepaper|iqilu|zhitongcaijing|news\.qq\.com|sohu|gov\.cn|央视官方|新浪7x24)"
+    )
+    item_sets = [s for s in item_sets if trusted.search(s[0])]
+    # 若页面不理想，用命中日期的摘要补条目（同样仅限可信来源）
     if len(item_sets) < 2:
         for url, title, snippet in dated[:12]:
             items = [it for it in extract_items(snippet) if not boilerplate.search(it)]

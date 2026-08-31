@@ -45,9 +45,14 @@ jobs:
           INPUT_DATE: ${{ inputs.date }}
         run: |
           echo "=== 凭据注入检查（只显示是否注入，不显示值）==="
+          MISSING=""
           for v in DEEPSEEK_API_KEY SMTP_SENDER SMTP_AUTHCODE SMTP_RECIPIENT; do
-            if [ -n "${!v}" ]; then echo "$v: OK(set)"; else echo "$v: MISSING"; fi
+            if [ -n "${!v}" ]; then echo "$v: OK(set)"; else echo "$v: MISSING"; MISSING="$MISSING $v"; fi
           done
+          if [ -n "$MISSING" ]; then
+            echo "::error::以下 Secrets 未注入运行器：$MISSING —— 请检查仓库 Settings → Secrets and variables → Actions 的 Repository secrets（不是 Environments/Codespaces），名称须完全一致：DEEPSEEK_API_KEY / SMTP_SENDER / SMTP_AUTHCODE / SMTP_RECIPIENT"
+            exit 1
+          fi
           ARGS=""
           if [ -n "$INPUT_DATE" ]; then ARGS="--date $INPUT_DATE"; fi
           python scripts/standalone_report.py $ARGS
