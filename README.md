@@ -49,15 +49,13 @@ News/                            # 开发工作区（也是 git 仓库根）
 │   └── smtp_config.json         # 本地 SMTP 凭据（仅本机手动补跑用，勿提交/外传）
 ├── scripts/
 │   ├── standalone_report.py     # 云端主脚本（采集→形势检索→API分析→生成→推送）
-│   ├── send_report.py           # SMTP 发信（环境变量优先；marker 去重；dry-run/--force）
-│   └── fetch_pages.py           # urllib 页面抓取助手（补充核对用）
-├── prompts/
-│   └── daily_report.md          # 日报生成规范源稿（与 standalone_report.py 的 SYSTEM_PROMPT 保持一致）
+│   └── send_report.py           # SMTP 发信（环境变量优先；marker 去重；dry-run/--force）
 ├── reports/
 │   ├── YYYY-MM-DD.md            # 每日日报（保留历史，不含分数）
-│   └── .sent-YYYY-MM-DD.marker  # 已发送标记（去重用）
+│   ├── .sent-YYYY-MM-DD.marker  # 已发送标记（去重用）
+│   └── state.json               # 跨日状态（预测/待确认池/数据序列/多空得分，自动维护）
 └── logs/
-    └── scheduler.log            # 运行日志（云端会随 artifact 上传）
+    └── standalone.log           # 运行日志（云端会随 artifact 上传）
 ```
 
 ## 3. 配置说明
@@ -81,7 +79,7 @@ python scripts/standalone_report.py --date YYYY-MM-DD --fetch-only
 python scripts/send_report.py --date YYYY-MM-DD
 ```
 
-## 5. 分析规范（SYSTEM_PROMPT / prompts/daily_report.md）
+## 5. 分析规范（standalone_report.py 的 SYSTEM_PROMPT）
 
 - **可分析性检查**：准入（可量化经济影响 / 可追踪行政资源 / 明确产业传导链 / 制度性改革）；
   禁入（纯礼仪外交、形象宣传、未公开军事细节、无产业变量社会新闻、形式化会议程序）→ 程序性信息备忘。
@@ -97,14 +95,14 @@ python scripts/send_report.py --date YYYY-MM-DD
 - 工作流：`.github/workflows/daily_report.yml`（21:30-23:30 北京多班重试、缺失延迟发送、含手动补跑 date 输入、20 分钟超时、上传日报+日志）。
 - 推送更新：在 `D:\CTYJ\DeepSeek\Harness\News` 执行 `git push origin main`。
 - 手动验证：Actions → `daily-xinwenlianbo-report` → Run workflow → date 填 `YYYY-MM-DD`（如 `2026-08-29`）。
-- 排障：查看运行日志（工作流日志或 artifact 内 `logs/scheduler.log`）；凭据问题核对 Secrets 名称。
+- 排障：查看运行日志（工作流日志或 artifact 内 `logs/standalone.log`）；凭据问题核对 Secrets 名称。
 
 ## 7. 维护建议
 
-- **修改规范**：同时更新 `prompts/daily_report.md` 与 `standalone_report.py` 的 `SYSTEM_PROMPT`（两处保持一致）。
+- **修改规范**：编辑 `standalone_report.py` 的 `SYSTEM_PROMPT`（主报告）与 `SYSTEM_PROMPT_EXTRA`（增强板块）即可，无外部源稿需同步。
 - **执行记录**：2026-08-29 本地全链路试运行通过；2026-08-30 云端手动触发曾出现"凌晨无数据 + Secrets 缺失"，
   已修复（date 输入、Secrets 提示、Bing 中文市场参数/反爬重试、采集诊断、重复函数定义清理）。
-- **双发防护**：云端发送后写 marker（仅云端自身）；本机路径已停用，无需跨端去重。
+- **双发防护**：云端发送后写 marker（仅云端自身）；本机路径（DSH 看板定时、Windows 计划任务）已删除，无需跨端去重。
 
 ## 8. 免责声明
 
