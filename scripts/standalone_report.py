@@ -966,6 +966,7 @@ def main() -> int:
         return 0
 
     # 2) 组装内容（主报告 → 状态抽取 → 增强板块 → 装配）
+    defer_send = False  # 数据缺失且未到末班(23:30)时延迟发送，等待后续定时重试
     if item_sets and item_sets[0][1]:
         api_key = resolve_api_key(args.api_key)
         if not api_key:
@@ -1016,6 +1017,14 @@ def main() -> int:
             reason += "（央视官方通道未命中：请检查网络可达性，或该日确无播出）"
         md = make_missing_report(report_date, date_cn, sources, reason)
         log(f"[生成] 数据缺失，生成说明日报（{len(md)} 字符）。原因：{reason}")
+        # 多时段重试策略：21:30-23:30 窗口内，未到末班(23:30)则不发送、不写标记，等待后续定时重试
+        hm = now_bj[11:16]  # HH:MM
+        if hm >= "23:30":
+            log("[缺失] 已达末班（≥23:30），本次发送缺失说明")
+            defer_send = False
+        else:
+            defer_send = True
+            log(f"[缺失] 当前 {hm}，未到末班（23:30），延迟不发送，等待后续定时重试")
 
     # 3) 来源核验 + 去分
     md = verify_report_sources(md)
@@ -1027,7 +1036,10 @@ def main() -> int:
     out_path.write_text(md, encoding="utf-8")
     log(f"[落盘] {out_path}（{len(md) / 1024:.1f} KB）")
 
-    # 5) 推送（去重由 do_send 的 marker 处理）
+    # 5) 推送（去重由 do_send 的 marker 处理；缺失未到末班则延迟）
+    if defer_send:
+        write_log(f"=== 结束 {report_date} deferred(缺失，等待后续定时重试) ===")
+        return 0
     cfg = load_config(Path(args.config))
     code = do_send(report_date, cfg, report_path=out_path, dry_run=args.dry_run, force=args.force)
     write_log(f"=== 结束 {report_date} exit={code}（dry_run={args.dry_run}）===")

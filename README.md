@@ -1,10 +1,10 @@
 # 📺 新闻联播自动化日报系统
 
-每日 **20:00（北京时间）** 由**云端（GitHub Actions）**自动执行：获取《新闻联播》文字稿 →
+每日 **21:30–23:30（北京时间）多时段自动重试** 由**云端（GitHub Actions）**自动执行：获取《新闻联播》文字稿 →
 提取关键信息 → **结合当前形势检索信息、对每条信息计算推演并给出判断** →
 按现有格式生成结构化日报 → 推送至 QQ 邮箱。**电脑关机也能准时送达。**
 
-- 执行：GitHub Actions 定时（`0 12 * * *` UTC = 北京 20:00），仓库：`chentaoyingju/xwlb-report`（私有）
+- 执行：GitHub Actions 定时（21:30/22:00/22:30/23:00/23:30 北京多班重试；央视 API 当日条目滞后约 2-4 小时，首班未拿到数据则延迟不发送，末班 23:30 仍缺才发缺失说明；发送成功写 marker 当天自动停止），仓库：`chentaoyingju/xwlb-report`（私有）
 - 凭据：全部走 GitHub Secrets（`DEEPSEEK_API_KEY`、`SMTP_SENDER`、`SMTP_AUTHCODE`、`SMTP_RECIPIENT`），**不写入代码/仓库**
 - 评分原则：分数仅用于内部分档（🔴/🟡/⚪），**日报文件中不显示任何分数**
 - 本机路径状态：DSH 看板定时任务与 Windows 计划任务**已停用**（2026-08-30），避免与云端双发
@@ -15,7 +15,7 @@
 ## 1. 架构与流程（云端单路径）
 
 ```
-GitHub Actions 定时触发（北京 20:00 / 12:00 UTC）
+GitHub Actions 定时触发（北京 21:30/22:00/22:30/23:00/23:30 多班重试）
    │
    ▼ ① 采集（多源交叉核对）
    │   央视官方 API（api.cntv.cn《新闻联播》栏目，当日完整清单，主通道，不依赖搜索引擎）
@@ -42,7 +42,7 @@ News/                            # 开发工作区（也是 git 仓库根）
 ├── README.md                    # 本文档
 ├── .gitignore                   # 排除 config/smtp_config.json、.credentials.yaml、reports/、logs/
 ├── .github/workflows/
-│   └── daily_report.yml         # GitHub Actions 工作流（每天 0 12 * * * UTC）
+│   └── daily_report.yml         # GitHub Actions 工作流（21:30-23:30 北京多班重试）
 ├── cloud/
 │   └── 部署指南.md              # 云端部署与安全指南（Secrets、双发处理、排障）
 ├── config/
@@ -94,7 +94,7 @@ python scripts/send_report.py --date YYYY-MM-DD
 
 ## 6. 云端部署状态与操作
 
-- 工作流：`.github/workflows/daily_report.yml`（已改 20:00、含手动补跑 date 输入、20 分钟超时、上传日报+日志）。
+- 工作流：`.github/workflows/daily_report.yml`（21:30-23:30 北京多班重试、缺失延迟发送、含手动补跑 date 输入、20 分钟超时、上传日报+日志）。
 - 推送更新：在 `D:\CTYJ\DeepSeek\Harness\News` 执行 `git push origin main`。
 - 手动验证：Actions → `daily-xinwenlianbo-report` → Run workflow → date 填 `YYYY-MM-DD`（如 `2026-08-29`）。
 - 排障：查看运行日志（工作流日志或 artifact 内 `logs/scheduler.log`）；凭据问题核对 Secrets 名称。
