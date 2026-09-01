@@ -21,7 +21,7 @@ on:
         default: ""
 
 permissions:
-  contents: read              # 最小权限：只读代码，不写仓库
+  contents: write            # 需要写权限：把 .sent-*.marker 提交回仓库，保证多班次去重
 
 jobs:
   report:
@@ -61,6 +61,20 @@ jobs:
           ARGS=""
           if [ -n "$INPUT_DATE" ]; then ARGS="--date $INPUT_DATE"; fi
           python scripts/standalone_report.py $ARGS
+
+      - name: Persist sent marker (dedup for later crons)
+        if: always()
+        run: |
+          if compgen -G "reports/.sent-*.marker" > /dev/null 2>&1; then
+            git config user.name "github-actions"
+            git config user.email "actions@users.noreply.github.com"
+            git add -f reports/.sent-*.marker
+            git commit -m "chore: persist sent marker" -q || true
+            git push origin main -q || echo "push failed (no change/race)"
+            echo "marker persisted"
+          else
+            echo "no marker to persist"
+          fi
 
       - name: Upload report + logs (optional)
         uses: actions/upload-artifact@v4

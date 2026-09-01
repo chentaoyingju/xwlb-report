@@ -102,7 +102,7 @@ python scripts/send_report.py --date YYYY-MM-DD
 - **修改规范**：编辑 `standalone_report.py` 的 `SYSTEM_PROMPT`（主报告）与 `SYSTEM_PROMPT_EXTRA`（增强板块）即可，无外部源稿需同步。
 - **执行记录**：2026-08-29 本地全链路试运行通过；2026-08-30 云端手动触发曾出现"凌晨无数据 + Secrets 缺失"，
   已修复（date 输入、Secrets 提示、Bing 中文市场参数/反爬重试、采集诊断、重复函数定义清理）。
-- **双发防护**：云端发送后写 marker（仅云端自身）；本机路径（DSH 看板定时、Windows 计划任务）已删除，无需跨端去重。
+- **双发防护**：云端发送成功后写 `.sent-*.marker` 并**提交回仓库**（工作流 contents:write），保证多班次自动去重（当天只发一封）；本机路径（DSH 看板定时、Windows 计划任务）已删除。
 
 ## 8. 免责声明
 
