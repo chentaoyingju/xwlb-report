@@ -4,11 +4,11 @@
 提取关键信息 → **结合当前形势检索信息、对每条信息计算推演并给出判断** →
 按现有格式生成结构化日报 → 推送至 QQ 邮箱。**电脑关机也能准时送达。**
 
-- 执行：GitHub Actions 定时（21:00/21:30/22:00/22:30/23:00 北京（UTC+8）多班重试；央视 API 当日条目滞后约 2-4 小时，首班未拿到数据则延迟不发送，末班 23:00 仍缺才发缺失说明；发送成功写 marker 当天自动停止），仓库：`chentaoyingju/xwlb-report`（私有）
+- 执行：GitHub Actions 定时（21:00/21:30/22:00/22:30/23:00 北京（UTC+8）多班重试；央视 API 当日条目滞后约 2-4 小时，首班未拿到数据则延迟不发送，末班 23:00 仍缺才发缺失说明；发送成功写 marker 当天自动停止），仓库：`<GitHub账号>/xwlb-report`（私有）
 - 凭据：全部走 GitHub Secrets（`DEEPSEEK_API_KEY`、`SMTP_SENDER`、`SMTP_AUTHCODE`、`SMTP_RECIPIENT`），**不写入代码/仓库**
 - 评分原则：分数仅用于内部分档（🔴/🟡/⚪），**日报文件中不显示任何分数**
 - 本机路径状态：DSH 看板定时任务与 Windows 计划任务**已停用**（2026-08-30），避免与云端双发
-- 工作目录（开发/手动补跑）：`D:\CTYJ\DeepSeek\Harness\News`
+- 工作目录（开发/手动补跑）：`<原开发工作区>`
 
 ---
 
@@ -63,7 +63,7 @@ News/                            # 开发工作区（也是 git 仓库根）
 - **云端**：凭据 = GitHub Secrets（`DEEPSEEK_API_KEY`、`SMTP_SENDER`、`SMTP_AUTHCODE`、`SMTP_RECIPIENT`），
   由工作流以环境变量注入；`SMTP_HOST=smtp.qq.com / SMTP_PORT=465 / SMTP_SSL=true` 在工作流中固定。
 - **本地手动补跑**：`config/smtp_config.json`（smtp.qq.com:465、sender、authcode、recipient）；
-  DeepSeek Key 解析顺序 = `--api-key` > 环境变量 `DEEPSEEK_API_KEY` > `C:\Users\CTYJ\.dsh\.credentials.yaml`。
+  DeepSeek Key 解析顺序 = `--api-key` > 环境变量 `DEEPSEEK_API_KEY` > `%USERPROFILE%\.dsh\.credentials.yaml`。
 
 > 🔒 安全：`smtp_config.json` 与 `.credentials.yaml` 含敏感凭据，已被 `.gitignore` 排除，请勿外传/提交公开仓库。
 
@@ -93,7 +93,7 @@ python scripts/send_report.py --date YYYY-MM-DD
 ## 6. 云端部署状态与操作
 
 - 工作流：`.github/workflows/daily_report.yml`（21:00-23:00 北京多班重试、缺失延迟发送、含手动补跑 date 输入、20 分钟超时、上传日报+日志）。
-- 推送更新：在 `D:\CTYJ\DeepSeek\Harness\News` 执行 `git push origin main`。
+- 推送更新：在 `<原开发工作区>` 执行 `git push origin main`。
 - 手动验证：Actions → `daily-xinwenlianbo-report` → Run workflow → date 填 `YYYY-MM-DD`（如 `2026-08-29`）。
 - 排障：查看运行日志（工作流日志或 artifact 内 `logs/standalone.log`）；凭据问题核对 Secrets 名称。
 
